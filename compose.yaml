@@ -1,0 +1,63 @@
+name: gridwatch
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_PASSWORD: local-admin-only
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  infra:
+    image: hashicorp/terraform:1.12.1
+    working_dir: /work
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - cp /config/main.tf /work/main.tf; cp /config/.terraform.lock.hcl /work/.terraform.lock.hcl; terraform init -input=false; terraform apply -input=false -auto-approve
+    environment:
+      TF_VAR_db_host: db
+      TF_VAR_admin_password: local-admin-only
+      TF_VAR_app_password: local-app-only
+    volumes:
+      - ./infra:/config:ro
+      - terraform_state:/work
+    depends_on:
+      db:
+        condition: service_healthy
+
+  app:
+    build: .
+    image: gridwatch-local:assessment
+    init: true
+    environment:
+      DATABASE_URL: postgres://gridwatch_app:local-app-only@db:5432/gridwatch
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      infra:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  tests:
+    image: gridwatch-local:assessment
+    build: .
+    profiles: [test]
+    init: true
+    command: ["npm", "test"]
+    environment:
+      DATABASE_URL: postgres://gridwatch_app:local-app-only@db:5432/gridwatch_test
+    depends_on:
+      infra:
+        condition: service_completed_successfully
+
+volumes:
+  postgres_data:
+  terraform_state:
