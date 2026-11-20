@@ -1,0 +1,61 @@
+digraph GridWatch {
+  graph [
+    rankdir=TB, bgcolor="white", pad="0.35", nodesep="0.48", ranksep="0.50",
+    splines=polyline, fontname="Helvetica", fontsize=24, fontcolor="#0F172A",
+    labelloc=t, labeljust=l,
+    label=<<B>GridWatch</B>  |  High level design<BR ALIGN="LEFT"/><FONT POINT-SIZE="13" COLOR="#475569">One regional deployment, repeated for India and Germany | services span three availability zones</FONT>>
+  ];
+  node [fontname="Helvetica", fontsize=13, fontcolor="#172033", color="#94A3B8", penwidth=1.3, margin="0.18,0.14", style=filled];
+  edge [fontname="Helvetica", fontsize=10, color="#64748B", fontcolor="#475569", arrowsize=0.7, penwidth=1.2];
+
+  vendor [shape=parallelogram, fillcolor="#F1F5F9", label="Vendor CSMS\nAPI + signed webhooks"];
+  browser [shape=tab, fillcolor="#DBEAFE", color="#2563EB", label="Operator browser\nDashboard + MapLibre"];
+
+  subgraph cluster_accept {
+    label="01  INGEST"; fontsize=12; fontcolor="#475569";
+    color="#CBD5E1"; bgcolor="#F8FAFC"; style=rounded; margin=20;
+    ingress [shape=box, style="rounded,filled", fillcolor="#EFF6FF", color="#3B82F6", label="CSMS adapter\nWebhook + poll workers\nShared per-site ownership"];
+    kafka [shape=box3d, fillcolor="#FEF3C7", color="#D97706", label="Kafka ingress\n24 partitions per region\nKey: operator + connection\n+ charger"];
+    ingress -> kafka [label="durable append"];
+  }
+
+  subgraph cluster_process {
+    label="02  PROCESS"; fontsize=12; fontcolor="#475569";
+    color="#DDD6FE"; bgcolor="#FAF8FF"; style=rounded; margin=20;
+    {rank=same; state; telemetry; archive;}
+    state [shape=component, fillcolor="#EDE9FE", color="#8B5CF6", label="State and session workers\nCurrent state + summaries\nInvoice correctness"];
+    telemetry [shape=component, fillcolor="#EDE9FE", color="#8B5CF6", label="Telemetry workers\nValidate + normalize\nEvent history"];
+    archive [shape=component, fillcolor="#EDE9FE", color="#8B5CF6", label="Archive workers\nRaw input + replay"];
+  }
+
+  subgraph cluster_store {
+    label="03  STORE"; fontsize=12; fontcolor="#475569";
+    color="#99D6C8"; bgcolor="#F3FBF8"; style=rounded; margin=20;
+    {rank=same; operational; history; objects;}
+    operational [shape=cylinder, fillcolor="#DDF4EA", color="#059669", label="PostgreSQL + PostGIS\nCatalog + verified locations\nCurrent state + billing\nPoll leases + outbox"];
+    history [shape=cylinder, fillcolor="#DDF4EA", color="#059669", label="Telemetry PostgreSQL\nDaily partitions\n7 days detailed history"];
+    objects [shape=folder, fillcolor="#DDF4EA", color="#059669", label="Object archive\n90 days raw data"];
+  }
+
+  subgraph cluster_serve {
+    label="04  SERVE"; fontsize=12; fontcolor="#475569";
+    color="#BFDBFE"; bgcolor="#F5F9FF"; style=rounded; margin=20;
+    {rank=same; relay; live; api;}
+    relay [shape=box, style="rounded,filled", fillcolor="#EFF6FF", color="#3B82F6", label="Outbox relay\nCommitted changes only"];
+    live [shape=box3d, fillcolor="#FEF3C7", color="#D97706", label="Kafka live changes\nOwn subscription per\nAPI replica"];
+    api [shape=box, style="rounded,filled", fillcolor="#EFF6FF", color="#3B82F6", label="Query API + SSE gateways\nTenant + viewport filtering\nBounded client queues"];
+    relay -> live [label="versioned events"];
+    live -> api [label="all gateway replicas"];
+  }
+
+  vendor -> ingress [dir=both, label="webhooks / poll API"];
+  kafka -> state;
+  kafka -> telemetry;
+  kafka -> archive;
+  state -> operational [label="state + checkpoint\n+ outbox in one transaction"];
+  telemetry -> history [label="history + checkpoint"];
+  archive -> objects [label="raw batches"];
+  operational -> api [label="snapshots + spatial queries"];
+  operational -> relay [label="pending outbox"];
+  api -> browser [label="snapshot + live SSE\nSubscribe, buffer, then snapshot"];
+}
